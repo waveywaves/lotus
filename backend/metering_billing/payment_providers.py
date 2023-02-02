@@ -2,14 +2,11 @@ import abc
 import datetime
 import logging
 from decimal import Decimal
-from re import S
-from typing import Union
 from urllib.parse import urlencode
 
 import pytz
 import stripe
 from dateutil.relativedelta import relativedelta
-from django.apps import apps
 from django.conf import settings
 from django.db.models import F, Prefetch, Q
 from metering_billing.exceptions.exceptions import ExternalConnectionInvalid
@@ -18,6 +15,7 @@ from metering_billing.serializers.payment_provider_serializers import (
 )
 from metering_billing.utils import calculate_end_date, date_as_max_dt, now_utc
 from metering_billing.utils.enums import (
+    ORGANIZATION_SETTING_GROUPS,
     ORGANIZATION_SETTING_NAMES,
     PAYMENT_PROVIDERS,
     PLAN_STATUS,
@@ -126,7 +124,7 @@ class StripeConnector(PaymentProvider):
             self.redirect_url = ""
 
     def working(self) -> bool:
-        return self.secret_key != "" and self.secret_key != None
+        return self.secret_key != "" and self.secret_key is not None
 
     def customer_connected(self, customer) -> bool:
         pp_ids = customer.integrations
@@ -136,7 +134,7 @@ class StripeConnector(PaymentProvider):
 
     def organization_connected(self, organization) -> bool:
         if self.self_hosted:
-            return self.secret_key != "" and self.secret_key != None
+            return self.secret_key != "" and self.secret_key is not None
         else:
             return (
                 organization.payment_provider_ids.get(PAYMENT_PROVIDERS.STRIPE, "")
@@ -157,7 +155,7 @@ class StripeConnector(PaymentProvider):
         """
         Imports customers from Stripe. If they already exist (by checking that either they already have their Stripe ID in our system, or seeing that they have the same email address), then we update the Stripe section of payment_providers dict to reflect new information. If they don't exist, we create them (not as a Lotus customer yet, just as a Stripe customer).
         """
-        from metering_billing.models import Customer, SubscriptionRecord
+        from metering_billing.models import Customer
 
         stripe.api_key = self.secret_key
 
@@ -283,12 +281,12 @@ class StripeConnector(PaymentProvider):
         from metering_billing.models import OrganizationSetting
 
         setting = OrganizationSetting.objects.get(
-            setting_name="generate_customer_after_creating_in_lotus",
+            setting_name=ORGANIZATION_SETTING_NAMES.GENERATE_CUSTOMER_IN_STRIPE_AFTER_LOTUS,
             organization=customer.organization,
-            setting_group=PAYMENT_PROVIDERS.STRIPE,
+            setting_group=ORGANIZATION_SETTING_GROUPS.STRIPE,
         )
         setting_value = setting.setting_values.get("value", False)
-        if setting_value == True:
+        if setting_value is True:
             assert (
                 customer.integrations.get(PAYMENT_PROVIDERS.STRIPE, {}).get("id")
                 is None
@@ -314,9 +312,9 @@ class StripeConnector(PaymentProvider):
                     "name": customer.customer_name,
                 }
                 customer.save()
-            except:
+            except Exception:
                 pass
-        elif setting_value == False:
+        elif setting_value is False:
             pass
         else:
             raise Exception(
@@ -324,8 +322,6 @@ class StripeConnector(PaymentProvider):
             )
 
     def create_payment_object(self, invoice) -> str:
-        from metering_billing.models import Customer, Organization
-
         stripe.api_key = self.secret_key
         # check everything works as expected + build invoice item
         assert invoice.external_payment_obj_id is None
@@ -372,7 +368,7 @@ class StripeConnector(PaymentProvider):
             filters = sr.filters.all()
             for f in filters:
                 metadata[f.property_name] = f.comparison_value[0]
-                name += " - ({} : {})".format(f.property_name, f.comparison_value[0])
+                name += f" - ({f.property_name} : {f.comparison_value[0]})"
             inv_dict = {
                 "description": name,
                 "amount": int(amount * 100),
@@ -428,7 +424,9 @@ class StripeConnector(PaymentProvider):
     def get_redirect_url(self) -> str:
         return self.redirect_url
 
-    def transfer_subscriptions(self, organization, end_now=False) -> int:
+    def transfer_subscriptions(
+        self, organization, end_now=False
+    ) -> list[stripe.Subscription]:
         from metering_billing.models import (
             Customer,
             ExternalPlanLink,
@@ -476,7 +474,8 @@ class StripeConnector(PaymentProvider):
             (plan_id, external_plan_ids)
             for plan_id, external_plan_ids in plan_dict.items()
         ]
-        for subscription in stripe_subscriptions.auto_paging_iter():
+        ret_subs = []
+        for i, subscription in enumerate(stripe_subscriptions.auto_paging_iter()):
             if (
                 subscription.cancel_at_period_end
             ):  # don't transfer subscriptions that are ending
@@ -510,7 +509,7 @@ class StripeConnector(PaymentProvider):
                 }
                 if end_now:
                     validated_data["start_date"] = now_utc()
-                    stripe.Subscription.delete(
+                    sub = stripe.Subscription.delete(
                         subscription.id,
                         prorate=True,
                         invoice_now=True,
@@ -519,10 +518,11 @@ class StripeConnector(PaymentProvider):
                     validated_data["start_date"] = datetime.datetime.utcfromtimestamp(
                         subscription.current_period_end
                     ).replace(tzinfo=pytz.utc)
-                    stripe.Subscription.modify(
+                    sub = stripe.Subscription.modify(
                         subscription.id,
                         cancel_at_period_end=True,
                     )
+                ret_subs.append(sub)
                 subscription = (
                     Subscription.objects.active()
                     .filter(
@@ -586,9 +586,7 @@ class StripeConnector(PaymentProvider):
                     validated_data[
                         "next_billing_date"
                     ] = tentative_nbd  # end_date - i * relativedelta(months=num_months)
-                subscription_record = SubscriptionRecord.objects.create(
-                    **validated_data
-                )
+                SubscriptionRecord.objects.create(**validated_data)
             else:  # error if multiple plans match
                 err_msg = "Multiple Lotus plans match Stripe subscription {}.".format(
                     subscription
@@ -598,14 +596,18 @@ class StripeConnector(PaymentProvider):
                         plan_id, item_ids.intersection(linked_ids)
                     )
                 raise ValueError(err_msg)
+        return ret_subs
 
-    def initialize_settings(self, organization):
+    def initialize_settings(self, organization, **kwargs):
         from metering_billing.models import OrganizationSetting
 
+        generate_stripe_after_lotus_value = kwargs.get(
+            "generate_stripe_after_lotus", False
+        )
         OrganizationSetting.objects.create(
             organization=organization,
             setting_name=ORGANIZATION_SETTING_NAMES.GENERATE_CUSTOMER_IN_STRIPE_AFTER_LOTUS,
-            setting_values={"value": False},
+            setting_values={"value": generate_stripe_after_lotus_value},
             setting_group=PAYMENT_PROVIDERS.STRIPE,
         )
 

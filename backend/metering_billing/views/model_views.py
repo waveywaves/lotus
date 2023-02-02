@@ -1,27 +1,41 @@
-import api.views as api_views
-
 # import lotus_python
 import posthog
-from actstream import action
 from actstream.models import Action
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Count, OuterRef, Prefetch, Q
 from django.db.utils import IntegrityError
-from drf_spectacular.utils import extend_schema, inline_serializer
-from metering_billing.auth import parse_organization
-from metering_billing.exceptions import DuplicateMetric, DuplicateWebhookEndpoint
+from drf_spectacular.utils import OpenApiCallback, extend_schema, inline_serializer
+from rest_framework import mixins, serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.pagination import CursorPagination
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+import api.views as api_views
+from api.serializers.webhook_serializers import (
+    InvoiceCreatedSerializer,
+    InvoicePaidSerializer,
+    UsageAlertTriggeredSerializer,
+)
+from metering_billing.exceptions import (
+    DuplicateMetric,
+    DuplicateWebhookEndpoint,
+    ServerError,
+)
 from metering_billing.models import (
+    APIToken,
     Backtest,
     Event,
     ExternalPlanLink,
     Feature,
     Metric,
+    Organization,
     OrganizationSetting,
     Plan,
     PlanVersion,
     PricingUnit,
     Product,
+    UsageAlert,
     User,
     WebhookEndpoint,
 )
@@ -30,25 +44,59 @@ from metering_billing.serializers.backtest_serializers import (
     BacktestCreateSerializer,
     BacktestDetailSerializer,
     BacktestSummarySerializer,
+    BacktestUUIDField,
 )
-from metering_billing.serializers.model_serializers import *
+from metering_billing.serializers.model_serializers import (
+    ActionSerializer,
+    AddOnCreateSerializer,
+    AddOnSerializer,
+    APITokenSerializer,
+    CustomerUpdateSerializer,
+    EventSerializer,
+    ExternalPlanLinkSerializer,
+    FeatureCreateSerializer,
+    FeatureSerializer,
+    MetricCreateSerializer,
+    MetricSerializer,
+    MetricUpdateSerializer,
+    OrganizationCreateSerializer,
+    OrganizationSerializer,
+    OrganizationSettingSerializer,
+    OrganizationSettingUpdateSerializer,
+    OrganizationUpdateSerializer,
+    PlanCreateSerializer,
+    PlanDetailSerializer,
+    PlanUpdateSerializer,
+    PlanVersionCreateSerializer,
+    PlanVersionDetailSerializer,
+    PlanVersionUpdateSerializer,
+    PricingUnitSerializer,
+    ProductSerializer,
+    UsageAlertCreateSerializer,
+    UsageAlertSerializer,
+    UserSerializer,
+    WebhookEndpointSerializer,
+)
 from metering_billing.serializers.request_serializers import (
     OrganizationSettingFilterSerializer,
+)
+from metering_billing.serializers.serializer_utils import (
+    AddonUUIDField,
+    MetricUUIDField,
+    OrganizationSettingUUIDField,
+    OrganizationUUIDField,
+    PlanUUIDField,
+    PlanVersionUUIDField,
+    UsageAlertUUIDField,
+    WebhookEndpointUUIDField,
 )
 from metering_billing.tasks import run_backtest
 from metering_billing.utils import now_utc
 from metering_billing.utils.enums import (
     METRIC_STATUS,
     PAYMENT_PROVIDERS,
-    PLAN_VERSION_STATUS,
+    WEBHOOK_TRIGGER_EVENTS,
 )
-from rest_framework import mixins, serializers, status, viewsets
-from rest_framework.decorators import action
-from rest_framework.exceptions import APIException, ValidationError
-from rest_framework.pagination import CursorPagination
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from svix.api import MessageIn, Svix
 
 POSTHOG_PERSON = settings.POSTHOG_PERSON
 SVIX_CONNECTOR = settings.SVIX_CONNECTOR
@@ -99,7 +147,7 @@ class PermissionPolicyMixin:
                 self.permission_classes = self.permission_classes_per_method.get(
                     handler.__name__
                 )
-        except:
+        except Exception:
             pass
 
         super().check_permissions(request)
@@ -127,7 +175,7 @@ class APITokenViewSet(
         return APIToken.objects.filter(organization=organization)
 
     def get_serializer_context(self):
-        context = super(APITokenViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -201,6 +249,10 @@ class APITokenViewSet(
         )
 
 
+class EmptySerializer(serializers.Serializer):
+    pass
+
+
 class WebhookViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
     """
     API endpoint that allows alerts to be viewed or edited.
@@ -208,7 +260,7 @@ class WebhookViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
 
     serializer_class = WebhookEndpointSerializer
     permission_classes = [IsAuthenticated & ValidOrganization]
-    http_method_names = ["get", "post", "head", "delete", "patch"]
+    http_method_names = ["get", "post", "head", "delete"]
     lookup_field = "webhook_endpoint_id"
     permission_classes_per_method = {
         "create": [IsAuthenticated & ValidOrganization],
@@ -218,13 +270,56 @@ class WebhookViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         "partial_update": [IsAuthenticated & ValidOrganization],
     }
     queryset = WebhookEndpoint.objects.all()
+    serializer_class = WebhookEndpointSerializer
+
+    def get_serializer_class(self):
+        if self.action == "destroy":
+            return EmptySerializer
+        return WebhookEndpointSerializer
+
+    @extend_schema(
+        callbacks=[
+            OpenApiCallback(
+                WEBHOOK_TRIGGER_EVENTS.INVOICE_CREATED.value,
+                "{$request.body#/webhook_url}",
+                extend_schema(
+                    description="Invoice created webhook",
+                    responses={200: InvoiceCreatedSerializer},
+                ),
+            ),
+            OpenApiCallback(
+                WEBHOOK_TRIGGER_EVENTS.INVOICE_PAID.value,
+                "{$request.body#/webhook_url}",
+                extend_schema(
+                    description="Invoice paid webhook",
+                    responses={200: InvoicePaidSerializer},
+                ),
+            ),
+            OpenApiCallback(
+                WEBHOOK_TRIGGER_EVENTS.USAGE_ALERT_TRIGGERED.value,
+                "{$request.body#/webhook_url}",
+                extend_schema(
+                    description="Usage alert triggered webhook",
+                    responses={200: UsageAlertTriggeredSerializer},
+                ),
+            ),
+        ]
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = WebhookEndpointUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_queryset(self):
         organization = self.request.organization
         return WebhookEndpoint.objects.filter(organization=organization)
 
     def get_serializer_context(self):
-        context = super(WebhookViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -234,16 +329,19 @@ class WebhookViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
             serializer.save(organization=self.request.organization)
         except ValueError as e:
             raise ServerError(e)
-        except IntegrityError as e:
+        except IntegrityError:
             raise DuplicateWebhookEndpoint("Webhook endpoint already exists")
 
     def perform_destroy(self, instance):
         if SVIX_CONNECTOR is not None:
             svix = SVIX_CONNECTOR
-            svix.endpoint.delete(
-                instance.organization.organization_id,
-                instance.webhook_endpoint_id,
-            )
+            try:
+                svix.endpoint.delete(
+                    instance.organization.organization_id.hex,
+                    instance.webhook_endpoint_id.hex,
+                )
+            except Exception:
+                pass
         instance.delete()
 
     def dispatch(self, request, *args, **kwargs):
@@ -251,7 +349,7 @@ class WebhookViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -301,7 +399,7 @@ class EventViewSet(
         )
 
     def get_serializer_context(self):
-        context = super(EventViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -313,10 +411,6 @@ class UserViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """
-    A simple ViewSet for viewing and editing Users.
-    """
-
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated & ValidOrganization]
     http_method_names = ["get", "post", "head"]
@@ -326,7 +420,7 @@ class UserViewSet(
         return User.objects.filter(organization=organization)
 
     def get_serializer_context(self):
-        context = super(UserViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -346,10 +440,6 @@ class CustomerViewSet(api_views.CustomerViewSet):
 
 
 class MetricViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing Billable Metrics.
-    """
-
     http_method_names = ["get", "post", "head", "patch"]
     lookup_field = "metric_id"
     permission_classes_per_method = {
@@ -357,6 +447,12 @@ class MetricViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         "partial_update": [IsAuthenticated & ValidOrganization],
     }
     queryset = Metric.objects.all()
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = MetricUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_queryset(self):
         organization = self.request.organization
@@ -372,7 +468,7 @@ class MetricViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         return MetricSerializer
 
     def get_serializer_context(self):
-        context = super(MetricViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -382,7 +478,7 @@ class MetricViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -412,10 +508,7 @@ class MetricViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
             return instance
         except IntegrityError as e:
             cause = e.__cause__
-            if "unique_org_metric_id" in str(cause):
-                error_message = "Metric ID already exists for this organization. This usually happens if you try to specify an ID instead of letting the Lotus backend handle ID creation."
-                raise DuplicateMetric(error_message)
-            elif "unique_org_billable_metric_name" in str(cause):
+            if "unique_org_billable_metric_name" in str(cause):
                 error_message = "A billable metric with the same name already exists for this organization. Please choose a different name."
                 raise DuplicateMetric(error_message)
             elif "uq_metric_w_null__" in str(cause):
@@ -431,10 +524,6 @@ class FeatureViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """
-    A simple ViewSet for viewing and editing Features.
-    """
-
     serializer_class = FeatureSerializer
     http_method_names = ["get", "post", "head"]
     permission_classes_per_method = {
@@ -443,12 +532,18 @@ class FeatureViewSet(
     }
     queryset = Feature.objects.all()
 
+    def get_serializer_class(self):
+        if self.action == "create":
+            return FeatureCreateSerializer
+        return FeatureSerializer
+
     def get_queryset(self):
         organization = self.request.organization
-        return Feature.objects.filter(organization=organization)
+        objs = Feature.objects.filter(organization=organization)
+        return objs
 
     def get_serializer_context(self):
-        context = super(FeatureViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -458,7 +553,7 @@ class FeatureViewSet(
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -474,15 +569,19 @@ class FeatureViewSet(
             )
         return response
 
+    @extend_schema(responses=FeatureSerializer)
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = self.perform_create(serializer)
+        feature_data = FeatureSerializer(instance).data
+        return Response(feature_data, status=status.HTTP_201_CREATED)
+
     def perform_create(self, serializer):
-        serializer.save(organization=self.request.organization)
+        return serializer.save(organization=self.request.organization)
 
 
 class PlanVersionViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing PlanVersions.
-    """
-
     serializer_class = PlanVersionDetailSerializer
     lookup_field = "version_id"
     http_method_names = [
@@ -495,6 +594,12 @@ class PlanVersionViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         "partial_update": [IsAuthenticated & ValidOrganization],
     }
     queryset = PlanVersion.objects.all()
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = PlanVersionUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_serializer_class(self):
         if self.action == "partial_update":
@@ -511,7 +616,7 @@ class PlanVersionViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         return qs
 
     def get_serializer_context(self):
-        context = super(PlanVersionViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         if self.request.user.is_authenticated:
             user = self.request.user
@@ -525,7 +630,7 @@ class PlanVersionViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -597,28 +702,14 @@ class PlanViewSet(api_views.PlanViewSet):
         "partial_update": [IsAuthenticated & ValidOrganization],
     }
 
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = PlanUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
+
     def get_queryset(self):
-        organization = self.request.organization
-        now = now_utc()
-        qs = super(PlanViewSet, self).get_queryset()
-        if self.action == "retrieve" or self.action == "list":
-            qs = qs.prefetch_related(
-                Prefetch(
-                    "versions",
-                    queryset=PlanVersion.objects.filter(
-                        ~Q(status=PLAN_VERSION_STATUS.ARCHIVED),
-                        organization=organization,
-                    ).annotate(
-                        active_subscriptions=Count(
-                            "subscription_record",
-                            filter=Q(
-                                subscription_record__start_date__lte=now,
-                                subscription_record__end_date__gte=now,
-                            ),
-                        )
-                    ),
-                )
-            )
+        qs = super().get_queryset()
         return qs
 
     def get_serializer_class(self):
@@ -660,12 +751,6 @@ class PlanViewSet(api_views.PlanViewSet):
         instance = serializer.save(
             organization=self.request.organization, created_by=user
         )
-        # if user:
-        #     action.send(
-        #         user,
-        #         verb="created",
-        #         action_object=instance,
-        #     )
         return instance
 
 
@@ -678,10 +763,6 @@ class InvoiceViewSet(api_views.InvoiceViewSet):
 
 
 class BacktestViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing Backtests.
-    """
-
     lookup_field = "backtest_id"
     http_method_names = [
         "get",
@@ -693,6 +774,12 @@ class BacktestViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         "destroy": [IsAuthenticated & ValidOrganization],
     }
     queryset = Backtest.objects.all()
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = BacktestUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -716,7 +803,7 @@ class BacktestViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -733,17 +820,13 @@ class BacktestViewSet(PermissionPolicyMixin, viewsets.ModelViewSet):
         return response
 
     def get_serializer_context(self):
-        context = super(BacktestViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing Products.
-    """
-
     serializer_class = ProductSerializer
     lookup_field = "product_id"
     http_method_names = [
@@ -765,7 +848,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -782,7 +865,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return response
 
     def get_serializer_context(self):
-        context = super(ProductViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -822,10 +905,6 @@ class ActionViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
 
 class ExternalPlanLinkViewSet(viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing ExternalPlanLink.
-    """
-
     serializer_class = ExternalPlanLinkSerializer
     permission_classes = [IsAuthenticated & ValidOrganization]
     lookup_field = "external_plan_id"
@@ -844,7 +923,7 @@ class ExternalPlanLinkViewSet(viewsets.ModelViewSet):
         if status.is_success(response.status_code):
             try:
                 username = self.request.user.username
-            except:
+            except Exception:
                 username = None
             organization = self.request.organization
             posthog.capture(
@@ -864,7 +943,7 @@ class ExternalPlanLinkViewSet(viewsets.ModelViewSet):
         serializer.save(organization=self.request.organization)
 
     def get_serializer_context(self):
-        context = super(ExternalPlanLinkViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -884,14 +963,16 @@ class ExternalPlanLinkViewSet(viewsets.ModelViewSet):
 
 
 class OrganizationSettingViewSet(viewsets.ModelViewSet):
-    """
-    A simple ViewSet for viewing and editing OrganizationSettings.
-    """
-
     permission_classes = [IsAuthenticated & ValidOrganization]
     http_method_names = ["get", "head", "patch"]
     lookup_field = "setting_id"
     queryset = OrganizationSetting.objects.all()
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = OrganizationSettingUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_serializer_class(self):
         if self.action == "partial_update":
@@ -942,10 +1023,6 @@ class OrganizationSettingViewSet(viewsets.ModelViewSet):
 class PricingUnitViewSet(
     mixins.CreateModelMixin, mixins.ListModelMixin, viewsets.GenericViewSet
 ):
-    """
-    A simple ViewSet for viewing and editing PricingUnits.
-    """
-
     serializer_class = PricingUnitSerializer
     permission_classes = [IsAuthenticated & ValidOrganization]
     http_method_names = ["get", "post", "head"]
@@ -958,7 +1035,7 @@ class PricingUnitViewSet(
         serializer.save(organization=self.request.organization)
 
     def get_serializer_context(self):
-        context = super(PricingUnitViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context
@@ -971,10 +1048,6 @@ class OrganizationViewSet(
     mixins.CreateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """
-    A simple ViewSet for viewing and editing OrganizationSettings.
-    """
-
     permission_classes = [IsAuthenticated & ValidOrganization]
     http_method_names = ["get", "patch", "head", "post"]
     permission_classes_per_method = {
@@ -984,14 +1057,17 @@ class OrganizationViewSet(
     lookup_field = "organization_id"
     queryset = Organization.objects.all()
 
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = OrganizationUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
+
     def get_queryset(self):
         organization = self.request.organization
-        return Organization.objects.filter(pk=organization.pk)
-
-    def get_object(self):
-        queryset = self.get_queryset()
-        obj = queryset.first()
-        return obj
+        return Organization.objects.filter(pk=organization.pk).prefetch_related(
+            "settings"
+        )
 
     def get_serializer_class(self):
         if self.action == "partial_update":
@@ -1001,7 +1077,7 @@ class OrganizationViewSet(
         return OrganizationSerializer
 
     def get_serializer_context(self):
-        context = super(OrganizationViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         user = self.request.user
         context.update({"organization": organization, "user": user})
@@ -1040,6 +1116,54 @@ class CustomerBalanceAdjustmentViewSet(api_views.CustomerBalanceAdjustmentViewSe
     pass
 
 
+class AddOnViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated & ValidOrganization]
+    http_method_names = ["get", "head", "post"]
+    lookup_field = "plan_id"
+    lookup_url_kwarg = "addon_id"
+    queryset = Plan.addons.all()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        organization = self.request.organization
+        context.update({"organization": organization})
+        return context
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_url_kwarg]
+        uuid = AddonUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_url_kwarg] = uuid
+        return super().get_object()
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return AddOnCreateSerializer
+        return AddOnSerializer
+
+    def perform_create(self, serializer):
+        if self.request.user.is_authenticated:
+            user = self.request.user
+        else:
+            user = None
+        instance = serializer.save(
+            organization=self.request.organization, created_by=user
+        )
+        return instance
+
+    def get_queryset(self):
+        filter_kwargs = {"organization": self.request.organization}
+        qs = self.queryset
+        return qs.filter(**filter_kwargs)
+
+    @extend_schema(responses=AddOnSerializer)
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = self.perform_create(serializer)
+        addon_data = AddOnSerializer(instance).data
+        return Response(addon_data, status=status.HTTP_201_CREATED)
+
+
 class UsageAlertViewSet(viewsets.ModelViewSet):
     """
     ViewSet for viewing and editing UsageAlerts.
@@ -1050,6 +1174,12 @@ class UsageAlertViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "delete"]
     queryset = UsageAlert.objects.all()
     lookup_field = "usage_alert_id"
+
+    def get_object(self):
+        string_uuid = self.kwargs[self.lookup_field]
+        uuid = UsageAlertUUIDField().to_internal_value(string_uuid)
+        self.kwargs[self.lookup_field] = uuid
+        return super().get_object()
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -1064,7 +1194,7 @@ class UsageAlertViewSet(viewsets.ModelViewSet):
         serializer.save(organization=self.request.organization)
 
     def get_serializer_context(self):
-        context = super(UsageAlertViewSet, self).get_serializer_context()
+        context = super().get_serializer_context()
         organization = self.request.organization
         context.update({"organization": organization})
         return context

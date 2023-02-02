@@ -1,7 +1,6 @@
 // @ts-ignore
 import React, { FC, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { useNavigate } from "react-router-dom";
+import { useParams , useNavigate } from "react-router-dom";
 import { PageLayout } from "../../components/base/PageLayout";
 import { Button } from "antd";
 import { useMutation, useQuery } from "react-query";
@@ -20,7 +19,7 @@ const TOAST_POSITION = toast.POSITION.TOP_CENTER;
 //create FC component called StripeIntegration
 const StripeIntegrationView: FC = () => {
   //create variable called {id} and set it to type string
-  let { id } = useParams<{ id: string }>();
+  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [isSettingValue, setIsSettingValue] = useState(false);
   const [currentStripeSetting, setCurrentStripeSetting] =
@@ -134,7 +133,7 @@ const StripeIntegrationView: FC = () => {
         <h2 className="text-16px mb-10">
           Charge and invoice your customers through your Stripe account
         </h2>
-        <div className="grid grid-cols-2 justify-start items-center gap-6 border-2 border-solid rounded border-[#EAEAEB] px-5 py-10">
+        <div className="grid grid-cols-2 justify-start items-center gap-6 border-2 border-solid rounded border-[#EAEAEB] px-6 py-10">
           <h3>Import Stripe Customers:</h3>
           <Button
             size="large"
@@ -182,7 +181,7 @@ const StripeIntegrationView: FC = () => {
             Transfer
           </Button>
           <h3>Create Lotus Customers In Stripe:</h3>
-          <div className="flex h-5 items-center">
+          <div className="flex h-6 items-center">
             <input
               id="comments"
               aria-describedby="comments-description"

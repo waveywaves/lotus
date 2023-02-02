@@ -34,7 +34,7 @@ services:
       - 29092:29092
 
   svix-server:
-    image: svix/svix-server
+    image: svix/svix-server:v0.74
     environment:
       WAIT_FOR: "true"
       SVIX_REDIS_DSN: redis://redis
@@ -46,7 +46,7 @@ services:
     depends_on:
     - db
     - redis
-    links: 
+    links:
     - db
     - redis
     restart: on-failure

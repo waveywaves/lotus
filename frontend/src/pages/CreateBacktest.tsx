@@ -2,11 +2,10 @@ import React, { FC, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "react-query";
 import { useNavigate } from "react-router-dom";
 import { PlanDetailType, PlanType, PlanVersionType } from "../types/plan-type";
-import { Plan } from "../api/api";
+import { Plan , Backtests } from "../api/api";
 import { Form, Button, Input, Radio, Select, Modal } from "antd";
 import { PageLayout } from "../components/base/PageLayout";
 import { CreateBacktestType, Substitution } from "../types/experiment-type";
-import { Backtests } from "../api/api";
 import { toast } from "react-toastify";
 import { usePlanState, usePlanUpdater } from "../context/PlanContext";
 import dayjs from "dayjs";
@@ -84,7 +83,7 @@ const CreateBacktest: FC = () => {
   );
 
   const runBacktest = () => {
-    var singlesubscription: Substitution[];
+    let singlesubscription: Substitution[];
     if (currentPlan && replacementPlan) {
       submitSubstitution();
     } else if (substitutions.length === 0) {
@@ -383,7 +382,7 @@ const CreateBacktest: FC = () => {
         closeIcon={<div></div>}
       >
         <div className="border-b border-gray-200 bg-[#F7F8FD] px-4 py-5 sm:px-6">
-          <h3 className="mb-5">Choose An Existing Plan To Replace</h3>
+          <h3 className="6">Choose An Existing Plan To Replace</h3>
           <Select
             onChange={addCurrentPlanSlot}
             className="w-8/12"
@@ -434,12 +433,12 @@ const CreateBacktest: FC = () => {
         closeIcon={<div></div>}
       >
         <div className="border-b border-gray-200 bg-[#F7F8FD] px-4 py-5 sm:px-6">
-          <h3 className="mb-5">Choose New Plan To Backtest</h3>
-          <h4 className="mb-5">
+          <h3 className="mb-6">Choose New Plan To Backtest</h3>
+          <h4 className="mb-6">
             Start From An Existing Plan, Then Edit The Differences
           </h4>
           <Select
-            className="w-8/12 mb-5"
+            className="w-8/12 mb-6"
             onChange={addReplacementPlanSlot}
             defaultValue={replacementPlan?.plan_name}
           >

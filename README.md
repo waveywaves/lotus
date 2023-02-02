@@ -8,18 +8,6 @@
 
 <!-- PROJECT SHIELDS -->
 <!--
-*** I'm using markdown "reference style" links for readability.
-*** Reference links are enclosed in brackets [ ] instead of parentheses ( ).
-*** See the bottom of this document for the declaration of the reference variables
-*** for contributors-url, forks-url, etc. This is an optional, concise syntax you may use.
-*** https://www.markdownguide.org/basic-syntax/#reference-style-links
--->
-<!-- [![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url] -->
 
 <!-- PROJECT LOGO -->
 
@@ -47,7 +35,16 @@
    <a href="https://www.producthunt.com/posts/lotus-6109ec1a-4e40-4280-8af3-c698da29e79e?utm_source=badge-top-post-badge&utm_medium=badge&utm_souce=badge-lotus&#0045;6109ec1a&#0045;4e40&#0045;4280&#0045;8af3&#0045;c698da29e79e" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=374178&theme=neutral&period=daily" alt="Lotus - Open&#0045;source&#0032;pricing&#0032;&#0038;&#0032;billing | Product Hunt" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 </div>
 
+
+<h3 align="center">
+  <a href="https://docs.uselotus.io/"><b>Documentation</b></a> &bull;
+  <a href="https://join.slack.com/t/lotus-community/shared_invite/zt-1fufuktbp-ignnw768aZgdFNlcvAOSrw"><b>Slack Community</b></a> &bull;
+  <a href="https://form.typeform.com/to/pehx2YSQ?typeform-source=docs.uselotus.io"><b>Book A Demo</b></a>
+</h3>
+
 <br/>
+
+
 
 Lotus is a pricing and billing engine that enables SaaS companies to deploy, monitor, and experiment with custom subscriptions and complex models like usage-based pricing.
 
@@ -57,7 +54,6 @@ Lotus provides a flexible and modular control panel on top of your existing quot
 
 <br/>
 
-[Website](https://www.uselotus.io/) · [Issues](https://github.com/uselotus/lotus/issues) · [Docs](https://docs.uselotus.io/docs/overview/why-lotus)
 
 <br/>
 
@@ -73,7 +69,7 @@ Test out Lotus with a demo account [here](https://demo.uselotus.io/register).
 
 The cloud version is best for convenience and fast deployment. This version also gets access to features faster than the self-hosted version.
 
-Sign up for our `beta` [here](https://dsl2wm77apy.typeform.com/to/pehx2YSQ?typeform-source=www.uselotus.io) or email us at founders@uselotus.io for more details.
+Sign up for a hosted account [here](https://dsl2wm77apy.typeform.com/to/pehx2YSQ?typeform-source=www.uselotus.io) or email us at founders@uselotus.io for more details.
 
 ### :bust_in_silhouette: Self-Hosted Version
 
@@ -171,5 +167,10 @@ Email Us: founders@uselotus.io
 Message Us on Slack: <a href="https://join.slack.com/t/lotus-community/shared_invite/zt-1ghi61p9j-ADYbp3tEL~N16AxQr2mlzA"><img src="https://img.shields.io/badge/slack-lotus-E01E5A.svg?logo=slack&labelColor=2EB67D" alt="Join Lotus on Slack"></a>
 
 Or visit www.uselotus.io
+
+<a href="https://github.com/uselotus/lotus/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=uselotus/lotus" />
+</a>
+
 
 <p align="right">(<a href="#lotus-pricing-and-billing-on-any-metric">back to top</a>)</p>

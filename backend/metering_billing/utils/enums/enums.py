@@ -9,12 +9,6 @@ class INVOICE_STATUS_ENUM(models.TextChoices):
     UNPAID = ("unpaid", _("Unpaid"))
 
 
-class PAYMENT_PLANS(models.TextChoices):
-    SELF_HOSTED_FREE = ("self_hosted_free", _("Self-Hosted Free"))
-    CLOUD = ("cloud", _("Cloud"))
-    SELF_HOSTED_ENTERPRISE = ("self_hosted_enterprise", _("Self-Hosted Enterprise"))
-
-
 class PRICE_TIER_TYPE(models.TextChoices):
     FLAT = ("flat", _("Flat"))
     PER_UNIT = ("per_unit", _("Per Unit"))
@@ -97,6 +91,12 @@ class COMPONENT_RESET_FREQUENCY(models.TextChoices):
 class FLAT_FEE_BILLING_TYPE(models.TextChoices):
     IN_ARREARS = ("in_arrears", _("In Arrears"))
     IN_ADVANCE = ("in_advance", _("In Advance"))
+
+
+class INVOICE_CHARGE_TIMING_TYPE(models.TextChoices):
+    IN_ARREARS = ("in_arrears", _("In Arrears"))
+    IN_ADVANCE = ("in_advance", _("In Advance"))
+    ONE_TIME = ("one_time", _("One Time"))
 
 
 class USAGE_CALC_GRANULARITY(models.TextChoices):
@@ -258,7 +258,11 @@ class ORGANIZATION_SETTING_NAMES(models.TextChoices):
         "generate_customer_after_creating_in_lotus",
         _("Generate in Stripe after Lotus"),
     )
-    SUBSCRIPTION_FILTERS = ("subscription_filters", _("Subscription Filters"))
+    SUBSCRIPTION_FILTER_KEYS = (
+        "subscription_filter_keys",
+        _("Subscription Filter Keys"),
+    )
+    PAYMENT_GRACE_PERIOD = ("payment_grace_period", _("Payment Grace Period"))
 
 
 class TAG_GROUP(models.TextChoices):
@@ -267,3 +271,4 @@ class TAG_GROUP(models.TextChoices):
 
 class ORGANIZATION_SETTING_GROUPS(models.TextChoices):
     STRIPE = ("stripe", _("Stripe"))
+    BILLING = ("billing", _("Billing"))
